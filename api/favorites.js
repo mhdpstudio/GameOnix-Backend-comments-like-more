@@ -1,66 +1,51 @@
 
-import {
-  getFavoritesByUsername,
-  saveFavoritesByUsername,
-} from "../lib/sheets.js";
+const AUTH_API_URL = "https://gameonix-backend.vercel.app/api/auth/me";
+const FAVORITES_API_URL = "https://gameonixfav.vercel.app/api/favorites";
 
-import { requireUser } from "../lib/auth.js";
-import { setCors } from "../lib/http.js";
+async function getAccessToken() {
+  const response = await fetch(`${AUTH_API_URL}?token=true`, {
+    method: "GET",
+    credentials: "include",
+  });
 
-export default async function handler(req, res) {
-  if (setCors(req, res)) return;
+  const data = await response.json().catch(() => ({}));
 
-  if (!["GET", "POST", "DELETE"].includes(req.method)) {
-    res.setHeader("Allow", "GET, POST, DELETE, OPTIONS");
-    return res.status(405).json({ error: "Method not allowed." });
+  if (!response.ok || !data.token) {
+    throw new Error(data.error || "Please log in to manage favorites.");
   }
 
-  try {
-    const username = requireUser(req, res);
-    if (!username) return;
+  return data.token;
+}
 
-    if (req.method === "GET") {
-      const record = await getFavoritesByUsername(username);
+async function request(method, slug) {
+  const token = await getAccessToken();
 
-      if (!record) {
-        return res.status(404).json({ error: "User not found." });
-      }
+  const response = await fetch(FAVORITES_API_URL, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(slug ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(slug ? { body: JSON.stringify({ slug }) } : {}),
+  });
 
-      return res.status(200).json({ favorites: record.favorites });
-    }
+  const data = await response.json().catch(() => ({}));
 
-    const slug =
-      typeof req.body?.slug === "string"
-        ? req.body.slug.trim()
-        : "";
-
-    if (!slug || slug.length > 200) {
-      return res.status(400).json({ error: "A valid game slug is required." });
-    }
-
-    const record = await getFavoritesByUsername(username);
-
-    if (!record) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    let favorites;
-
-    if (req.method === "POST") {
-      favorites = [...new Set([...record.favorites, slug])];
-    } else {
-      favorites = record.favorites.filter((item) => item !== slug);
-    }
-
-    const saved = await saveFavoritesByUsername(username, favorites);
-
-    if (!saved) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    return res.status(200).json({ favorites });
-  } catch (error) {
-    console.error("Favorites API error:", error);
-    return res.status(500).json({ error: "Failed to update favorites." });
+  if (!response.ok) {
+    throw new Error(data.error || "Favorites request failed.");
   }
+
+  return data;
+}
+
+export function getFavorites() {
+  return request("GET");
+}
+
+export function addFavorite(slug) {
+  return request("POST", slug);
+}
+
+export function removeFavorite(slug) {
+  return request("DELETE", slug);
 }
