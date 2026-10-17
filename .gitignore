@@ -1,0 +1,23 @@
+
+# Dependencies
+node_modules/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Build outputs
+.vercel/
+dist/
+build/
+
+# Private keys and credentials
+*.pem
+*.key
+*service-account*.json

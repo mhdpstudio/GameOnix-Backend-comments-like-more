@@ -1,0 +1,13 @@
+{
+  "name": "gameonix-community-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
