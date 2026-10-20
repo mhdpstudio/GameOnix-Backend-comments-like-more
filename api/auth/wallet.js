@@ -4,9 +4,13 @@ import { getWalletBalanceByUsername } from "../../lib/sheets.js";
 import {
   createWalletTopUpRequest,
   getWalletTransactions,
+  updateWalletTopUpRequest,
   updateWalletTransactionStatus,
 } from "../../lib/wallet-ledger.js";
-import { sendWalletTopUpRequestEmail } from "../../lib/wallet-mailer.js";
+import {
+  sendWalletTopUpRequestEmail,
+  sendWalletTopUpUpdateEmail,
+} from "../../lib/wallet-mailer.js";
 
 const PAYMENTS_URL =
   "https://raw.githubusercontent.com/mhdpstudio/GameOnix-Data-Content/main/payments.json";
@@ -27,15 +31,15 @@ function getRequestBody(req) {
 export default async function handler(req, res) {
   if (setCors(req, res)) return;
 
-  if (req.method !== "GET" && req.method !== "POST") {
-    res.setHeader("Allow", "GET, POST, OPTIONS");
+  if (!["GET", "POST", "PUT"].includes(req.method)) {
+    res.setHeader("Allow", "GET, POST, PUT, OPTIONS");
     return res.status(405).json({ error: "Method not allowed." });
   }
 
   const username = requireUser(req, res);
   if (!username) return;
 
-  if (req.method === "POST") {
+  if (req.method === "POST" || req.method === "PUT") {
     const { amount, paymentMethod, mobileNumber, whatsappNumber } =
       getRequestBody(req);
     const parsedAmount = Number(amount);
@@ -49,6 +53,132 @@ export default async function handler(req, res) {
       return res.status(400).json({
         error: `Enter an amount between 1 and ${MAX_TOP_UP_AMOUNT} EGP.`,
       });
+    }
+
+    if (req.method === "PUT") {
+      const { requestId } = getRequestBody(req);
+
+      if (typeof requestId !== "string" || !requestId.trim()) {
+        return res.status(400).json({ error: "A valid request ID is required." });
+      }
+      if (
+        typeof paymentMethod !== "string" ||
+        !paymentMethod.trim() ||
+        paymentMethod.length > 80
+      ) {
+        return res.status(400).json({ error: "Choose a valid payment method." });
+      }
+      if (
+        typeof mobileNumber !== "string" ||
+        mobileNumber.trim().length > 30
+      ) {
+        return res.status(400).json({ error: "Enter a valid mobile number." });
+      }
+      if (
+        typeof whatsappNumber !== "string" ||
+        !/^[+\d][\d\s()-]{5,28}$/.test(whatsappNumber.trim())
+      ) {
+        return res.status(400).json({ error: "Enter a valid WhatsApp number." });
+      }
+
+      try {
+        const account = await getWalletBalanceByUsername(username);
+        if (!account) {
+          return res.status(404).json({ error: "Wallet account was not found." });
+        }
+        if (!account.email) {
+          return res.status(409).json({
+            error: "Add an email address to your account before editing a request.",
+          });
+        }
+
+        const paymentsResponse = await fetch(PAYMENTS_URL, { cache: "no-store" });
+        if (!paymentsResponse.ok) {
+          throw new Error(
+            `Payment methods request failed (${paymentsResponse.status})`
+          );
+        }
+
+        const paymentMethods = await paymentsResponse.json();
+        const method = Array.isArray(paymentMethods)
+          ? paymentMethods.find(
+              (item) =>
+                item?.name === paymentMethod.trim() && item.av === true
+            )
+          : null;
+        if (!method) {
+          return res.status(400).json({
+            error: "That payment method is unavailable. Refresh and choose another.",
+          });
+        }
+
+        const normalizedMobileNumber =
+          method["mobile-number"] ? mobileNumber.trim() : "Not required";
+        if (
+          method["mobile-number"] &&
+          (!normalizedMobileNumber ||
+            !/^[+\d][\d\s()-]{5,28}$/.test(normalizedMobileNumber))
+        ) {
+          return res.status(400).json({ error: "Enter a valid mobile number." });
+        }
+
+        const updatedRequest = await updateWalletTopUpRequest({
+          id: requestId.trim(),
+          username,
+          email: account.email,
+          currentBalance: account.balance,
+          amount: parsedAmount,
+          paymentMethod: method.name,
+          mobileNumber: normalizedMobileNumber,
+          whatsappNumber: whatsappNumber.trim(),
+        });
+        if (!updatedRequest) {
+          return res.status(404).json({
+            error: "This wallet request was not found for your account.",
+          });
+        }
+        if (updatedRequest.unavailable) {
+          return res.status(409).json({
+            error: "Only pending top-up requests can be edited.",
+          });
+        }
+
+        let notificationSent = true;
+        try {
+          await sendWalletTopUpUpdateEmail({
+            requestId: updatedRequest.id,
+            username,
+            email: account.email,
+            currentBalance: account.balance,
+            amount: updatedRequest.amount,
+            paymentMethod: updatedRequest.details.paymentMethod,
+            mobileNumber: updatedRequest.details.mobileNumber,
+            whatsappNumber: updatedRequest.details.whatsappNumber,
+            previousDetails: updatedRequest.previousDetails,
+            previousAmount: updatedRequest.previousAmount,
+          });
+        } catch (emailError) {
+          notificationSent = false;
+          console.error("Wallet request update notification failed:", emailError);
+        }
+
+        return res.status(200).json({
+          request: {
+            id: updatedRequest.id,
+            type: "top_up_request",
+            description: JSON.stringify(updatedRequest.details),
+            amount: updatedRequest.amount,
+            status: updatedRequest.status,
+            createdAt: updatedRequest.createdAt,
+          },
+          notificationSent,
+        });
+      } catch (error) {
+        console.error("Wallet top-up request update failed:", error);
+        return res.status(500).json({
+          error: "Unable to update your top-up request. Please try again later.",
+        });
+      }
     }
 
     if (
