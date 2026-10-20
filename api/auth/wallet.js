@@ -36,7 +36,8 @@ export default async function handler(req, res) {
   if (!username) return;
 
   if (req.method === "POST") {
-    const { amount, paymentMethod, mobileNumber } = getRequestBody(req);
+    const { amount, paymentMethod, mobileNumber, whatsappNumber } =
+      getRequestBody(req);
     const parsedAmount = Number(amount);
 
     if (
@@ -65,7 +66,24 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Enter a valid mobile number." });
     }
 
+    if (
+      typeof whatsappNumber !== "string" ||
+      !/^[+\d][\d\s()-]{5,28}$/.test(whatsappNumber.trim())
+    ) {
+      return res.status(400).json({ error: "Enter a valid WhatsApp number." });
+    }
+
     try {
+      const account = await getWalletBalanceByUsername(username);
+      if (!account) {
+        return res.status(404).json({ error: "Wallet account was not found." });
+      }
+      if (!account.email) {
+        return res.status(409).json({
+          error: "Add an email address to your account before requesting a top-up.",
+        });
+      }
+
       const paymentsResponse = await fetch(PAYMENTS_URL, { cache: "no-store" });
 
       if (!paymentsResponse.ok) {
@@ -87,7 +105,9 @@ export default async function handler(req, res) {
       }
 
       const normalizedMobileNumber =
-        typeof mobileNumber === "string" ? mobileNumber.trim() : "";
+        method["mobile-number"] && typeof mobileNumber === "string"
+          ? mobileNumber.trim()
+          : "";
 
       if (method["mobile-number"] && !normalizedMobileNumber) {
         return res.status(400).json({ error: "Enter a mobile number." });
@@ -102,18 +122,24 @@ export default async function handler(req, res) {
 
       const requestId = await createWalletTopUpRequest({
         username,
+        email: account.email,
+        currentBalance: account.balance,
         amount: parsedAmount,
         paymentMethod: method.name,
         mobileNumber: normalizedMobileNumber || "Not required",
+        whatsappNumber: whatsappNumber.trim(),
       });
 
       try {
         await sendWalletTopUpRequestEmail({
           requestId,
           username,
+          email: account.email,
+          currentBalance: account.balance,
           amount: parsedAmount,
           paymentMethod: method.name,
           mobileNumber: normalizedMobileNumber || "Not required",
+          whatsappNumber: whatsappNumber.trim(),
         });
       } catch (emailError) {
         try {
@@ -138,14 +164,18 @@ export default async function handler(req, res) {
   }
 
   try {
-    const balance = await getWalletBalanceByUsername(username);
+    const account = await getWalletBalanceByUsername(username);
 
-    if (balance === null) {
+    if (!account) {
       return res.status(404).json({ error: "Wallet account was not found." });
     }
 
     const transactions = await getWalletTransactions(username);
-    return res.status(200).json({ balance, transactions });
+    return res.status(200).json({
+      balance: account.balance,
+      email: account.email,
+      transactions,
+    });
   } catch (error) {
     console.error("Wallet lookup failed:", error);
     return res.status(500).json({ error: "Unable to load wallet balance." });
