@@ -1,0 +1,201 @@
+import jwt from "jsonwebtoken";
+import {
+  approveWalletTopUpRequest,
+  cancelWalletTopUpRequest,
+} from "../../lib/wallet-ledger.js";
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => {
+    const entities = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[character];
+  });
+}
+
+function sendPage(res, statusCode, title, message, token) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+  );
+  res.end(`<!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>${escapeHtml(title)} · GameOnix Wallet</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 20px; background: #111014; color: #f7f7fa; font: 16px/1.6 Arial, sans-serif; }
+          main { width: min(100%, 480px); padding: 30px; border: 1px solid #514267; border-radius: 18px; background: #1b1920; box-shadow: 0 24px 70px #0008; }
+          h1 { margin: 0 0 12px; color: #c9a7ff; font-size: 24px; }
+          p { color: #c6c1d0; }
+          button { width: 100%; margin-top: 14px; padding: 13px 16px; border: 0; border-radius: 9px; background: ${title.startsWith("Cancel") ? "#a83d46" : "#16845b"}; color: white; font-size: 15px; font-weight: 700; cursor: pointer; }
+          small { display: block; margin-top: 16px; color: #9994a3; }
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>${escapeHtml(title)}</h1>
+          <p>${escapeHtml(message)}</p>
+          ${
+            token
+              ? `<form method="post">
+                  <input type="hidden" name="token" value="${escapeHtml(token)}">
+                  <button type="submit">${title.startsWith("Cancel") ? "Confirm cancellation" : "Confirm approval and add funds"}</button>
+                </form>
+                <small>This request can only be processed once and only while it is pending.</small>`
+              : ""
+          }
+        </main>
+      </body>
+    </html>`);
+}
+
+function getToken(req) {
+  if (req.method === "POST") {
+    if (req.body && typeof req.body === "object") {
+      return typeof req.body.token === "string" ? req.body.token : "";
+    }
+    if (typeof req.body === "string") {
+      return new URLSearchParams(req.body).get("token") || "";
+    }
+    return "";
+  }
+
+  if (typeof req.query?.token === "string") return req.query.token;
+  return new URL(req.url, "https://gameonixfav.vercel.app")
+    .searchParams.get("token");
+}
+
+function verifyActionToken(token) {
+  const secret = process.env.GAMEONIX_API_TOKEN_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error("Wallet admin actions are not configured.");
+  }
+
+  const payload = jwt.verify(token, secret, {
+    algorithms: ["HS256"],
+    issuer: "gameonix-community-api",
+    audience: "gameonix-wallet-admin",
+  });
+
+  if (
+    payload.purpose !== "wallet-admin-action" ||
+    typeof payload.requestId !== "string" ||
+    typeof payload.username !== "string" ||
+    typeof payload.requestFingerprint !== "string" ||
+    !/^[a-f\d]{64}$/i.test(payload.requestFingerprint) ||
+    !["approve", "cancel"].includes(payload.action)
+  ) {
+    throw new Error("This wallet action link is invalid.");
+  }
+
+  return payload;
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.setHeader("Allow", "GET, POST");
+    return res.status(405).json({ error: "Method not allowed." });
+  }
+
+  let payload;
+  let token;
+  try {
+    token = getToken(req);
+    if (!token) throw new Error("The action link is missing its token.");
+    payload = verifyActionToken(token);
+  } catch (error) {
+    return sendPage(
+      res,
+      400,
+      "Invalid or expired link",
+      error.message || "This wallet action link is invalid or has expired."
+    );
+  }
+
+  const actionTitle =
+    payload.action === "approve" ? "Approve top-up request" : "Cancel top-up request";
+  if (req.method === "GET") {
+    return sendPage(
+      res,
+      200,
+      actionTitle,
+      `Confirm that you want to ${
+        payload.action === "approve"
+          ? "approve this request and add the requested funds. Confirm only after verifying the payment"
+          : "cancel this pending request"
+      } for ${payload.username}.`,
+      token
+    );
+  }
+
+  try {
+    const result =
+      payload.action === "approve"
+        ? await approveWalletTopUpRequest({
+            id: payload.requestId,
+            username: payload.username,
+            expectedFingerprint: payload.requestFingerprint,
+          })
+        : await cancelWalletTopUpRequest({
+            id: payload.requestId,
+            username: payload.username,
+            expectedFingerprint: payload.requestFingerprint,
+          });
+
+    if (!result) {
+      return sendPage(
+        res,
+        404,
+        "Request not found",
+        "This request could not be found for the account in the email."
+      );
+    }
+    if (result.unavailable) {
+      return sendPage(
+        res,
+        409,
+        "Request already processed",
+        `This request is no longer pending. Current status: ${result.status || "unknown"}.`
+      );
+    }
+    if (result.changed) {
+      return sendPage(
+        res,
+        409,
+        "Request updated",
+        "The request details have changed since this email was sent. Use the latest email to review it."
+      );
+    }
+
+    const message =
+      payload.action === "approve"
+        ? `${result.amount.toFixed(2)} EGP was added to ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.`
+        : `The pending top-up request for ${result.username} was cancelled.`;
+    return sendPage(
+      res,
+      200,
+      payload.action === "approve" ? "Request approved" : "Request cancelled",
+      message
+    );
+  } catch (error) {
+    console.error("Wallet admin action failed:", error);
+    return sendPage(
+      res,
+      500,
+      "Action failed",
+      "The request could not be processed. No success was reported; check the wallet ledger and try again."
+    );
+  }
+}
