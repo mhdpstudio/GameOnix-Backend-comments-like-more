@@ -3,12 +3,14 @@ import { setCors } from "../../lib/http.js";
 import { getWalletBalanceByUsername } from "../../lib/sheets.js";
 import {
   createWalletTopUpRequest,
+  cancelWalletTopUpRequest,
   getWalletTransactions,
   updateWalletTopUpRequest,
   updateWalletTransactionStatus,
 } from "../../lib/wallet-ledger.js";
 import {
   sendWalletTopUpRequestEmail,
+  sendWalletTopUpCancellationEmail,
   sendWalletTopUpUpdateEmail,
 } from "../../lib/wallet-mailer.js";
 
@@ -31,13 +33,70 @@ function getRequestBody(req) {
 export default async function handler(req, res) {
   if (setCors(req, res)) return;
 
-  if (!["GET", "POST", "PUT"].includes(req.method)) {
-    res.setHeader("Allow", "GET, POST, PUT, OPTIONS");
+  if (!["GET", "POST", "PUT", "DELETE"].includes(req.method)) {
+    res.setHeader("Allow", "GET, POST, PUT, DELETE, OPTIONS");
     return res.status(405).json({ error: "Method not allowed." });
   }
 
   const username = requireUser(req, res);
   if (!username) return;
+
+  if (req.method === "DELETE") {
+    const { requestId } = getRequestBody(req);
+    if (typeof requestId !== "string" || !requestId.trim()) {
+      return res.status(400).json({ error: "A valid request ID is required." });
+    }
+
+    try {
+      const account = await getWalletBalanceByUsername(username);
+      if (!account) {
+        return res.status(404).json({ error: "Wallet account was not found." });
+      }
+
+      const cancelledRequest = await cancelWalletTopUpRequest({
+        id: requestId.trim(),
+        username,
+      });
+      if (!cancelledRequest) {
+        return res.status(404).json({
+          error: "This wallet request was not found for your account.",
+        });
+      }
+      if (cancelledRequest.unavailable) {
+        return res.status(409).json({
+          error: "Only pending top-up requests can be cancelled.",
+        });
+      }
+
+      let notificationSent = true;
+      try {
+        await sendWalletTopUpCancellationEmail({
+          requestId: cancelledRequest.id,
+          username,
+          email: account.email || "Not available",
+          currentBalance: account.balance,
+          amount: cancelledRequest.amount,
+          paymentMethod: cancelledRequest.details.paymentMethod || "Not provided",
+          mobileNumber: cancelledRequest.details.mobileNumber || "Not provided",
+          whatsappNumber:
+            cancelledRequest.details.whatsappNumber || "Not provided",
+        });
+      } catch (emailError) {
+        notificationSent = false;
+        console.error(
+          "Wallet request cancellation notification failed:",
+          emailError
+        );
+      }
+
+      return res.status(200).json({ notificationSent });
+    } catch (error) {
+      console.error("Wallet top-up request cancellation failed:", error);
+      return res.status(500).json({
+        error: "Unable to cancel your top-up request. Please try again later.",
+      });
+    }
+  }
 
   if (req.method === "POST" || req.method === "PUT") {
     const { amount, paymentMethod, mobileNumber, whatsappNumber } =
