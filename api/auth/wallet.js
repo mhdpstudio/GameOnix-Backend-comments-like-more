@@ -1,6 +1,11 @@
 import { requireUser } from "../../lib/auth.js";
 import { setCors } from "../../lib/http.js";
 import { getWalletBalanceByUsername } from "../../lib/sheets.js";
+import {
+  createWalletTopUpRequest,
+  getWalletTransactions,
+  updateWalletTransactionStatus,
+} from "../../lib/wallet-ledger.js";
 import { sendWalletTopUpRequestEmail } from "../../lib/wallet-mailer.js";
 
 const PAYMENTS_URL =
@@ -95,12 +100,29 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "Enter a valid mobile number." });
       }
 
-      const requestId = await sendWalletTopUpRequestEmail({
+      const requestId = await createWalletTopUpRequest({
         username,
         amount: parsedAmount,
         paymentMethod: method.name,
         mobileNumber: normalizedMobileNumber || "Not required",
       });
+
+      try {
+        await sendWalletTopUpRequestEmail({
+          requestId,
+          username,
+          amount: parsedAmount,
+          paymentMethod: method.name,
+          mobileNumber: normalizedMobileNumber || "Not required",
+        });
+      } catch (emailError) {
+        try {
+          await updateWalletTransactionStatus(requestId, "notification_failed");
+        } catch (statusError) {
+          console.error("Wallet request status update failed:", statusError);
+        }
+        throw emailError;
+      }
 
       return res.status(202).json({
         message:
@@ -122,7 +144,8 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Wallet account was not found." });
     }
 
-    return res.status(200).json({ balance });
+    const transactions = await getWalletTransactions(username);
+    return res.status(200).json({ balance, transactions });
   } catch (error) {
     console.error("Wallet lookup failed:", error);
     return res.status(500).json({ error: "Unable to load wallet balance." });
