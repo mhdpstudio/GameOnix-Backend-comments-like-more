@@ -1,6 +1,7 @@
 import { requireUser } from "../../lib/auth.js";
 import { setCors } from "../../lib/http.js";
 import {
+  deleteAllWalletNotifications,
   deleteWalletNotification,
   getWalletNotifications,
   markAllWalletNotificationsRead,
@@ -106,7 +107,12 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "DELETE") {
-      const { notificationId } = getRequestBody(req);
+      const { notificationId, deleteAll } = getRequestBody(req);
+      if (deleteAll === true) {
+        const deletedCount = await deleteAllWalletNotifications(username);
+        return res.status(200).json({ success: true, deletedCount });
+      }
+
       if (typeof notificationId !== "string" || !notificationId.trim()) {
         return res.status(400).json({
           error: "A valid notification ID is required.",
