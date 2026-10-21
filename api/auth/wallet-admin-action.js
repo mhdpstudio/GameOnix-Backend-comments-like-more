@@ -192,6 +192,20 @@ export default async function handler(req, res) {
           payload.action === "approve"
             ? `EGP ${result.amount.toFixed(2)} was added to your wallet. New balance: EGP ${result.balance.toFixed(2)}.`
             : `Your pending top-up request for EGP ${result.amount.toFixed(2)} was cancelled by the admin.`,
+        type: "top_up_request",
+        details: {
+          requestId: result.id,
+          amount: result.amount,
+          email: result.details?.email || "Not provided",
+          paymentMethod: result.details?.paymentMethod || "Not provided",
+          mobileNumber: result.details?.mobileNumber || "Not provided",
+          whatsappNumber: result.details?.whatsappNumber || "Not provided",
+          currentBalance:
+            payload.action === "approve"
+              ? result.balance
+              : result.details?.currentBalance,
+          status: payload.action === "approve" ? "approved" : "cancelled",
+        },
       });
     } catch (notificationError) {
       notificationCreated = false;

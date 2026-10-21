@@ -104,6 +104,20 @@ export default async function handler(req, res) {
         username,
         title: "Top-up request cancelled",
         message: `Your EGP ${cancelledRequest.amount.toFixed(2)} request was cancelled.`,
+        type: "top_up_request",
+        details: {
+          requestId: cancelledRequest.id,
+          amount: cancelledRequest.amount,
+          email: account.email || "Not available",
+          paymentMethod:
+            cancelledRequest.details.paymentMethod || "Not provided",
+          mobileNumber:
+            cancelledRequest.details.mobileNumber || "Not provided",
+          whatsappNumber:
+            cancelledRequest.details.whatsappNumber || "Not provided",
+          currentBalance: account.balance,
+          status: "cancelled",
+        },
       });
 
       return res.status(200).json({ notificationSent, notificationCreated });
@@ -242,6 +256,17 @@ export default async function handler(req, res) {
           username,
           title: "Top-up request updated",
           message: `Your request for EGP ${updatedRequest.amount.toFixed(2)} via ${method.name} was updated and is still pending review.`,
+          type: "top_up_request",
+          details: {
+            requestId: updatedRequest.id,
+            amount: updatedRequest.amount,
+            email: account.email,
+            paymentMethod: method.name,
+            mobileNumber: updatedRequest.details.mobileNumber,
+            whatsappNumber: updatedRequest.details.whatsappNumber,
+            currentBalance: account.balance,
+            status: "pending",
+          },
         });
 
         return res.status(200).json({
@@ -367,6 +392,17 @@ export default async function handler(req, res) {
         username,
         title: "Top-up request sent",
         message: `Your request for EGP ${parsedAmount.toFixed(2)} via ${method.name} was sent for review.`,
+        type: "top_up_request",
+        details: {
+          requestId,
+          amount: parsedAmount,
+          email: account.email,
+          paymentMethod: method.name,
+          mobileNumber: normalizedMobileNumber || "Not required",
+          whatsappNumber: whatsappNumber.trim(),
+          currentBalance: account.balance,
+          status: "pending",
+        },
       });
 
       return res.status(202).json({

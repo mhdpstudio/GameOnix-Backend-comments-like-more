@@ -5,6 +5,79 @@ import {
   markAllWalletNotificationsRead,
   markWalletNotificationRead,
 } from "../../lib/wallet-notifications.js";
+import { getWalletTransactions } from "../../lib/wallet-ledger.js";
+
+function enrichLegacyNotificationDetails(notifications, transactions) {
+  return notifications.map((notification) => {
+    if (
+      notification.details ||
+      (!/top.?up/i.test(notification.title) &&
+        notification.type !== "top_up_request")
+    ) {
+      return notification;
+    }
+
+    const amountMatch = notification.message.match(
+      /EGP\s*([\d,]+(?:\.\d{1,2})?)/i
+    );
+    const amount = amountMatch
+      ? Number(amountMatch[1].replace(/,/g, ""))
+      : NaN;
+    if (!Number.isFinite(amount)) return notification;
+
+    const methodMatch = notification.message.match(
+      /\bvia\s+(.+?)(?:\s+was\b|[.!?]|$)/i
+    );
+    const paymentMethod = methodMatch?.[1]?.trim();
+    const title = notification.title.toLowerCase();
+    const expectedStatus = title.includes("approv")
+      ? "approved"
+      : title.includes("cancel")
+        ? "cancelled"
+        : "pending";
+
+    const candidates = transactions.filter((transaction) => {
+      if (
+        transaction.type !== "top_up_request" ||
+        Math.round(transaction.amount * 100) !== Math.round(amount * 100) ||
+        transaction.status.toLowerCase() !== expectedStatus
+      ) {
+        return false;
+      }
+
+      try {
+        const details = JSON.parse(transaction.description);
+        return (
+          details &&
+          typeof details === "object" &&
+          (!paymentMethod ||
+            String(details.paymentMethod || "").toLowerCase() ===
+              paymentMethod.toLowerCase())
+        );
+      } catch {
+        return false;
+      }
+    });
+
+    if (candidates.length !== 1) return notification;
+
+    const transaction = candidates[0];
+    const details = JSON.parse(transaction.description);
+    return {
+      ...notification,
+      details: {
+        requestId: transaction.id,
+        amount: transaction.amount,
+        email: details.email || "Not provided",
+        paymentMethod: details.paymentMethod || "Not provided",
+        mobileNumber: details.mobileNumber || "Not provided",
+        whatsappNumber: details.whatsappNumber || "Not provided",
+        currentBalance: details.currentBalance,
+        status: expectedStatus,
+      },
+    };
+  });
+}
 
 function getRequestBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -31,7 +104,19 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "GET") {
-      const notifications = await getWalletNotifications(username);
+      let notifications = await getWalletNotifications(username);
+      if (
+        notifications.some(
+          (notification) =>
+            !notification.details && /top.?up/i.test(notification.title)
+        )
+      ) {
+        const transactions = await getWalletTransactions(username);
+        notifications = enrichLegacyNotificationDetails(
+          notifications,
+          transactions
+        );
+      }
       return res.status(200).json({
         notifications,
         unreadCount: notifications.filter(
