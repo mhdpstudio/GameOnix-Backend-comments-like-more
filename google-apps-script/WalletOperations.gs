@@ -1,3 +1,7 @@
+function doGet() {
+  return jsonResponse({ success: true, service: "wallet-operations" });
+}
+
 function doPost(event) {
   const payload = JSON.parse(event.postData.contents);
   const signature = payload.signature;

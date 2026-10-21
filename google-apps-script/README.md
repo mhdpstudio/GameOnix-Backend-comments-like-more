@@ -22,6 +22,11 @@ ledger rows through one Google Sheets `batchUpdate`.
    - `WALLET_SHEETS_OPERATIONS_URL`: the deployed `/exec` URL.
    - `WALLET_SHEETS_OPERATIONS_SECRET`: the same secret as the script property.
 
+To check the deployment URL, open its `/exec` URL in a browser. It should show
+`{"success":true,"service":"wallet-operations"}`. If it shows a Google sign-in,
+permission, or script error page instead, fix the Web App deployment access and
+use its current `/exec` URL in Vercel.
+
 Never expose the HMAC secret in frontend code. The backend expects the existing
 `Wallet` account column, `Wallet Transactions` ledger tab, and the main account
 tab to remain in the same spreadsheet. `Wallet Accounts` is created on demand.

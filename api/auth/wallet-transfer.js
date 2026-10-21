@@ -126,6 +126,8 @@ export default async function handler(req, res) {
         : error.code === "WALLET_OPERATION_NOT_CONFIGURED" ||
             error.code === "WALLET_BUSY"
           ? 503
+          : error.code === "WALLET_OPERATION_INVALID_RESPONSE"
+            ? 502
           : error.message?.includes("PIN attempts")
             ? 429
             : error.message?.includes("PIN")
