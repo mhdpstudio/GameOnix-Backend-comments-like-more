@@ -1,6 +1,7 @@
 import { requireUser } from "../../lib/auth.js";
 import { setCors } from "../../lib/http.js";
 import { getWalletBalanceByUsername } from "../../lib/sheets.js";
+import { getWalletAccountProfile } from "../../lib/wallet-accounts.js";
 import {
   createWalletTopUpRequest,
   cancelWalletTopUpRequest,
@@ -463,9 +464,12 @@ export default async function handler(req, res) {
     }
 
     const transactions = await getWalletTransactions(username);
+    const walletAccount = await getWalletAccountProfile(username);
     return res.status(200).json({
       balance: account.balance,
       email: account.email,
+      walletNumber: walletAccount.walletNumber,
+      pinConfigured: walletAccount.pinConfigured,
       transactions,
     });
   } catch (error) {
