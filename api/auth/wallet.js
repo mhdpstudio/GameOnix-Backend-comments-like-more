@@ -13,7 +13,10 @@ import {
   sendWalletTopUpCancellationEmail,
   sendWalletTopUpUpdateEmail,
 } from "../../lib/wallet-mailer.js";
-import { createWalletNotification } from "../../lib/wallet-notifications.js";
+import {
+  createWalletNotification,
+  updatePendingWalletRequestNotification,
+} from "../../lib/wallet-notifications.js";
 
 const PAYMENTS_URL =
   "https://raw.githubusercontent.com/mhdpstudio/GameOnix-Data-Content/main/payments.json";
@@ -100,25 +103,40 @@ export default async function handler(req, res) {
         );
       }
 
-      const notificationCreated = await tryCreateWalletNotification({
-        username,
-        title: "Top-up request cancelled",
-        message: `Your EGP ${cancelledRequest.amount.toFixed(2)} request was cancelled.`,
-        type: "top_up_request",
-        details: {
-          requestId: cancelledRequest.id,
-          amount: cancelledRequest.amount,
-          email: account.email || "Not available",
-          paymentMethod:
-            cancelledRequest.details.paymentMethod || "Not provided",
-          mobileNumber:
-            cancelledRequest.details.mobileNumber || "Not provided",
-          whatsappNumber:
-            cancelledRequest.details.whatsappNumber || "Not provided",
-          currentBalance: account.balance,
-          status: "cancelled",
-        },
-      });
+      const notificationDetails = {
+        requestId: cancelledRequest.id,
+        amount: cancelledRequest.amount,
+        email: account.email || "Not available",
+        paymentMethod: cancelledRequest.details.paymentMethod || "Not provided",
+        mobileNumber: cancelledRequest.details.mobileNumber || "Not provided",
+        whatsappNumber:
+          cancelledRequest.details.whatsappNumber || "Not provided",
+        currentBalance: account.balance,
+        status: "cancelled",
+      };
+      const notificationMessage = `Your request for EGP ${cancelledRequest.amount.toFixed(2)} via ${notificationDetails.paymentMethod} was cancelled.`;
+      let notificationCreated = false;
+      try {
+        const notificationUpdated =
+          await updatePendingWalletRequestNotification({
+            username,
+            requestId: cancelledRequest.id,
+            title: "Top-up request cancelled",
+            message: notificationMessage,
+            details: notificationDetails,
+          });
+        notificationCreated =
+          notificationUpdated ||
+          (await tryCreateWalletNotification({
+            username,
+            title: "Top-up request cancelled",
+            message: notificationMessage,
+            type: "top_up_request",
+            details: notificationDetails,
+          }));
+      } catch (error) {
+        console.error("Wallet cancellation notification update failed:", error);
+      }
 
       return res.status(200).json({ notificationSent, notificationCreated });
     } catch (error) {
