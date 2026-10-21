@@ -30,17 +30,18 @@ function enrichLegacyNotificationDetails(notifications, transactions) {
     );
     const paymentMethod = methodMatch?.[1]?.trim();
     const title = notification.title.toLowerCase();
-    const expectedStatus = title.includes("approv")
+    const terminalStatus = title.includes("approv")
       ? "approved"
       : title.includes("cancel")
         ? "cancelled"
-        : "pending";
+        : null;
 
     const candidates = transactions.filter((transaction) => {
       if (
         transaction.type !== "top_up_request" ||
         Math.round(transaction.amount * 100) !== Math.round(amount * 100) ||
-        transaction.status.toLowerCase() !== expectedStatus
+        (terminalStatus &&
+          transaction.status.toLowerCase() !== terminalStatus)
       ) {
         return false;
       }
@@ -73,7 +74,7 @@ function enrichLegacyNotificationDetails(notifications, transactions) {
         mobileNumber: details.mobileNumber || "Not provided",
         whatsappNumber: details.whatsappNumber || "Not provided",
         currentBalance: details.currentBalance,
-        status: expectedStatus,
+        status: transaction.status.toLowerCase(),
       },
     };
   });
