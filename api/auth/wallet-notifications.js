@@ -1,6 +1,7 @@
 import { requireUser } from "../../lib/auth.js";
 import { setCors } from "../../lib/http.js";
 import {
+  deleteWalletNotification,
   getWalletNotifications,
   markAllWalletNotificationsRead,
   markWalletNotificationRead,
@@ -95,8 +96,8 @@ function getRequestBody(req) {
 export default async function handler(req, res) {
   if (setCors(req, res)) return;
 
-  if (req.method !== "GET" && req.method !== "POST") {
-    res.setHeader("Allow", "GET, POST, OPTIONS");
+  if (!["GET", "POST", "DELETE"].includes(req.method)) {
+    res.setHeader("Allow", "GET, POST, DELETE, OPTIONS");
     return res.status(405).json({ error: "Method not allowed." });
   }
 
@@ -104,6 +105,25 @@ export default async function handler(req, res) {
   if (!username) return;
 
   try {
+    if (req.method === "DELETE") {
+      const { notificationId } = getRequestBody(req);
+      if (typeof notificationId !== "string" || !notificationId.trim()) {
+        return res.status(400).json({
+          error: "A valid notification ID is required.",
+        });
+      }
+
+      const deleted = await deleteWalletNotification(
+        username,
+        notificationId.trim()
+      );
+      if (!deleted) {
+        return res.status(404).json({ error: "Notification was not found." });
+      }
+
+      return res.status(200).json({ success: true });
+    }
+
     if (req.method === "GET") {
       let notifications = await getWalletNotifications(username);
       if (
