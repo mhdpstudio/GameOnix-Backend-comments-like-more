@@ -4,6 +4,7 @@ import {
   cancelWalletTopUpRequest,
 } from "../../lib/wallet-ledger.js";
 import { createWalletNotification } from "../../lib/wallet-notifications.js";
+import { sendWalletTopUpUserStatusEmail } from "../../lib/wallet-mailer.js";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => {
@@ -215,17 +216,43 @@ export default async function handler(req, res) {
       );
     }
 
+    let userEmailSent = false;
+    try {
+      await sendWalletTopUpUserStatusEmail({
+        email: result.details?.email,
+        username: result.username,
+        requestId: result.id,
+        amount: result.amount,
+        paymentMethod: result.details?.paymentMethod,
+        status: payload.action === "approve" ? "approved" : "rejected",
+        currentBalance:
+          payload.action === "approve"
+            ? result.balance
+            : result.details?.currentBalance,
+      });
+      userEmailSent = true;
+    } catch (emailError) {
+      console.error("Wallet request decision email failed:", emailError);
+    }
+
     const resultMessage =
       payload.action === "approve"
         ? `${result.amount.toFixed(2)} EGP was added to ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.`
         : `The pending top-up request for ${result.username} was cancelled.`;
+    const completionMessage = [
+      resultMessage,
+      !notificationCreated &&
+        "However, the user's in-app notification could not be created.",
+      !userEmailSent &&
+        "The request was processed, but the confirmation email could not be sent.",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return sendPage(
       res,
       200,
       payload.action === "approve" ? "Request approved" : "Request cancelled",
-      notificationCreated
-        ? resultMessage
-        : `${resultMessage} However, the user's in-app notification could not be created.`
+      completionMessage
     );
   } catch (error) {
     console.error("Wallet admin action failed:", error);

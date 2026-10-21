@@ -12,6 +12,7 @@ import {
   sendWalletTopUpRequestEmail,
   sendWalletTopUpCancellationEmail,
   sendWalletTopUpUpdateEmail,
+  sendWalletTopUpUserStatusEmail,
 } from "../../lib/wallet-mailer.js";
 import {
   createWalletNotification,
@@ -406,6 +407,22 @@ export default async function handler(req, res) {
         throw emailError;
       }
 
+      let userEmailSent = false;
+      try {
+        await sendWalletTopUpUserStatusEmail({
+          email: account.email,
+          username,
+          requestId,
+          amount: parsedAmount,
+          paymentMethod: method.name,
+          status: "submitted",
+          currentBalance: account.balance,
+        });
+        userEmailSent = true;
+      } catch (emailError) {
+        console.error("Wallet request confirmation email failed:", emailError);
+      }
+
       const notificationCreated = await tryCreateWalletNotification({
         username,
         title: "Top-up request sent",
@@ -428,6 +445,7 @@ export default async function handler(req, res) {
           "Your top-up request was sent to the admin. Your wallet balance will change only after review.",
         requestId,
         notificationCreated,
+        userEmailSent,
       });
     } catch (error) {
       console.error("Wallet top-up request failed:", error);
