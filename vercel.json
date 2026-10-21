@@ -2,12 +2,6 @@
 {
   "functions": {
     "api/**/*.js": {
-      "maxDuration": 10
-    },
-    "api/auth/wallet-transfer.js": {
-      "maxDuration": 30
-    },
-    "api/auth/wallet-admin-action.js": {
       "maxDuration": 30
     }
   }
