@@ -13,10 +13,21 @@ import {
   sendWalletTopUpCancellationEmail,
   sendWalletTopUpUpdateEmail,
 } from "../../lib/wallet-mailer.js";
+import { createWalletNotification } from "../../lib/wallet-notifications.js";
 
 const PAYMENTS_URL =
   "https://raw.githubusercontent.com/mhdpstudio/GameOnix-Data-Content/main/payments.json";
 const MAX_TOP_UP_AMOUNT = 100000;
+
+async function tryCreateWalletNotification(notification) {
+  try {
+    await createWalletNotification(notification);
+    return true;
+  } catch (error) {
+    console.error("Wallet notification creation failed:", error);
+    return false;
+  }
+}
 
 function getRequestBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
@@ -89,7 +100,13 @@ export default async function handler(req, res) {
         );
       }
 
-      return res.status(200).json({ notificationSent });
+      const notificationCreated = await tryCreateWalletNotification({
+        username,
+        title: "Top-up request cancelled",
+        message: `Your EGP ${cancelledRequest.amount.toFixed(2)} request was cancelled.`,
+      });
+
+      return res.status(200).json({ notificationSent, notificationCreated });
     } catch (error) {
       console.error("Wallet top-up request cancellation failed:", error);
       return res.status(500).json({
@@ -221,6 +238,12 @@ export default async function handler(req, res) {
           console.error("Wallet request update notification failed:", emailError);
         }
 
+        const notificationCreated = await tryCreateWalletNotification({
+          username,
+          title: "Top-up request updated",
+          message: `Your request for EGP ${updatedRequest.amount.toFixed(2)} via ${method.name} was updated and is still pending review.`,
+        });
+
         return res.status(200).json({
           request: {
             id: updatedRequest.id,
@@ -231,6 +254,7 @@ export default async function handler(req, res) {
             createdAt: updatedRequest.createdAt,
           },
           notificationSent,
+          notificationCreated,
         });
       } catch (error) {
         console.error("Wallet top-up request update failed:", error);
@@ -339,10 +363,17 @@ export default async function handler(req, res) {
         throw emailError;
       }
 
+      const notificationCreated = await tryCreateWalletNotification({
+        username,
+        title: "Top-up request sent",
+        message: `Your request for EGP ${parsedAmount.toFixed(2)} via ${method.name} was sent for review.`,
+      });
+
       return res.status(202).json({
         message:
           "Your top-up request was sent to the admin. Your wallet balance will change only after review.",
         requestId,
+        notificationCreated,
       });
     } catch (error) {
       console.error("Wallet top-up request failed:", error);

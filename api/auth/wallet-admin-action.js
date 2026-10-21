@@ -3,6 +3,7 @@ import {
   approveWalletTopUpRequest,
   cancelWalletTopUpRequest,
 } from "../../lib/wallet-ledger.js";
+import { createWalletNotification } from "../../lib/wallet-notifications.js";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => {
@@ -179,7 +180,28 @@ export default async function handler(req, res) {
       );
     }
 
-    const message =
+    let notificationCreated = true;
+    try {
+      await createWalletNotification({
+        username: result.username,
+        title:
+          payload.action === "approve"
+            ? "Top-up request approved"
+            : "Top-up request cancelled",
+        message:
+          payload.action === "approve"
+            ? `EGP ${result.amount.toFixed(2)} was added to your wallet. New balance: EGP ${result.balance.toFixed(2)}.`
+            : `Your pending top-up request for EGP ${result.amount.toFixed(2)} was cancelled by the admin.`,
+      });
+    } catch (notificationError) {
+      notificationCreated = false;
+      console.error(
+        "Wallet admin action notification creation failed:",
+        notificationError
+      );
+    }
+
+    const resultMessage =
       payload.action === "approve"
         ? `${result.amount.toFixed(2)} EGP was added to ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.`
         : `The pending top-up request for ${result.username} was cancelled.`;
@@ -187,7 +209,9 @@ export default async function handler(req, res) {
       res,
       200,
       payload.action === "approve" ? "Request approved" : "Request cancelled",
-      message
+      notificationCreated
+        ? resultMessage
+        : `${resultMessage} However, the user's in-app notification could not be created.`
     );
   } catch (error) {
     console.error("Wallet admin action failed:", error);
