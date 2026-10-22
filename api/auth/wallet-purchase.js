@@ -123,6 +123,9 @@ export default async function handler(req, res) {
       });
     }
     const total = Math.round(unitPrice * quantity * 100) / 100;
+    const productType = String(product.type || "").trim().toLowerCase();
+    const isGiftCard =
+      productType === "gift card" || productType === "gift cards";
     if (account.balance < total) {
       return res.status(409).json({
         error: `Insufficient wallet balance. Available: EGP ${Number(account.balance).toFixed(2)}.`,
@@ -136,6 +139,7 @@ export default async function handler(req, res) {
       packageName: `${String(pack.title || "")}${pack.type ? ` ${String(pack.type)}` : ""}`.trim(),
       packageTitle: String(pack.title || ""),
       packageType: String(pack.type || ""),
+      isGiftCard,
       quantity,
       playerId: isGift ? "" : playerId.trim(),
       serverId: serverId.trim(),
