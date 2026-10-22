@@ -10,6 +10,8 @@ import { createWalletNotification } from "../../lib/wallet-notifications.js";
 
 const CATALOG_URL =
   "https://raw.githubusercontent.com/mhdpstudio/GameOnix-Data-Content/main/recharge.json";
+const PAYMENTS_URL =
+  "https://raw.githubusercontent.com/mhdpstudio/GameOnix-Data-Content/main/payments.json";
 const RAW_ASSET_BASE =
   "https://raw.githubusercontent.com/mhdpstudio/GameOnix-Data-Content/main/";
 
@@ -55,6 +57,8 @@ export default async function handler(req, res) {
     productId,
     packIndex,
     quantity,
+    paymentMethod,
+    mobileNumber = "",
     playerId = "",
     serverId = "",
     contactEmail = "",
@@ -65,12 +69,15 @@ export default async function handler(req, res) {
   if (
     typeof productId !== "string" ||
     !productId.trim() ||
+    typeof paymentMethod !== "string" ||
+    !paymentMethod.trim() ||
     !Number.isInteger(packIndex) ||
     !Number.isInteger(quantity) ||
     quantity < 1 ||
     quantity > 99 ||
     typeof isGift !== "boolean" ||
     !isValidOptionalText(playerId) ||
+    !isValidOptionalText(mobileNumber) ||
     !isValidOptionalText(serverId) ||
     !isValidOptionalText(contactEmail, 254) ||
     (contactEmail.trim() &&
@@ -90,9 +97,10 @@ export default async function handler(req, res) {
   }
 
   try {
-    const [account, catalogResponse] = await Promise.all([
+    const [account, catalogResponse, paymentsResponse] = await Promise.all([
       getWalletBalanceByUsername(username),
       fetch(CATALOG_URL, { cache: "no-store" }),
+      fetch(PAYMENTS_URL, { cache: "no-store" }),
     ]);
     if (!account) {
       return res.status(404).json({ error: "Wallet account was not found." });
@@ -100,10 +108,38 @@ export default async function handler(req, res) {
     if (!catalogResponse.ok) {
       throw new Error(`Game catalog request failed (${catalogResponse.status}).`);
     }
+    if (!paymentsResponse.ok) {
+      throw new Error(`Payment methods request failed (${paymentsResponse.status}).`);
+    }
 
-    const catalog = await catalogResponse.json();
-    if (!Array.isArray(catalog)) {
-      throw new Error("The game catalog format is invalid.");
+    const [catalog, paymentMethods] = await Promise.all([
+      catalogResponse.json(),
+      paymentsResponse.json(),
+    ]);
+    if (!Array.isArray(catalog) || !Array.isArray(paymentMethods)) {
+      throw new Error("The game catalog or payment methods format is invalid.");
+    }
+    const isWalletPayment = paymentMethod.trim().toLowerCase() === "wallet";
+    const selectedPayment = isWalletPayment
+      ? { name: "Wallet", logo: "", av: true }
+      : paymentMethods.find(
+          (method) =>
+            String(method?.name || "").trim().toLowerCase() ===
+            paymentMethod.trim().toLowerCase()
+        );
+    if (!selectedPayment?.av) {
+      return res.status(400).json({
+        error: "The selected payment method is unavailable. Refresh and try again.",
+      });
+    }
+    if (
+      !isWalletPayment &&
+      selectedPayment["mobile-number"] &&
+      !mobileNumber.trim()
+    ) {
+      return res.status(400).json({
+        error: "Enter the mobile number required by the selected payment method.",
+      });
     }
     const product = catalog.find(
       (item) => String(item?.id || "") === productId.trim()
@@ -126,7 +162,7 @@ export default async function handler(req, res) {
     const productType = String(product.type || "").trim().toLowerCase();
     const isGiftCard =
       productType === "gift card" || productType === "gift cards";
-    if (account.balance < total) {
+    if (isWalletPayment && account.balance < total) {
       return res.status(409).json({
         error: `Insufficient wallet balance. Available: EGP ${Number(account.balance).toFixed(2)}.`,
       });
@@ -141,12 +177,16 @@ export default async function handler(req, res) {
       packageType: String(pack.type || ""),
       isGiftCard,
       quantity,
+      paymentMethod: selectedPayment.name,
+      paymentMethodLogo: String(selectedPayment.logo || ""),
+      walletPayment: isWalletPayment,
+      mobileNumber: mobileNumber.trim(),
       playerId: isGift ? "" : playerId.trim(),
       serverId: serverId.trim(),
       isGift,
       recipient: isGift ? recipient.trim() : "",
       email: account.email || "",
-      contactEmail: contactEmail.trim(),
+      contactEmail: contactEmail.trim() || account.email || "",
     };
 
     const request = await createWalletPurchaseRequest({
@@ -177,9 +217,9 @@ export default async function handler(req, res) {
         currentBalance: account.balance,
         details,
       }),
-      account.email
+      details.contactEmail
         ? sendWalletPurchaseStatusEmail({
-            email: account.email,
+              email: details.contactEmail,
             username,
             requestId: request.id,
             amount: total,

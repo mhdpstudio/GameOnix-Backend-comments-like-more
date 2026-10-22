@@ -36,6 +36,18 @@ function sendPage(res, statusCode, title, message, token, options = {}) {
     (_, index) => `<label for="gift-card-code-${index}">Gift card code ${index + 1}</label>
       <input id="gift-card-code-${index}" name="giftCardCode_${index}" type="text" maxlength="200" autocomplete="off" required>`
   ).join("");
+  const approvalButtonLabel =
+    title.startsWith("Approve game")
+      ? options.walletPayment === false
+        ? "Confirm approval (no wallet deduction)"
+        : "Confirm approval and deduct wallet"
+      : title.startsWith("Approve")
+        ? "Confirm approval and add funds"
+        : isRejection
+          ? title.startsWith("Reject")
+            ? "Confirm rejection"
+            : "Confirm cancellation"
+          : title;
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store, max-age=0");
@@ -73,7 +85,7 @@ function sendPage(res, statusCode, title, message, token, options = {}) {
                   <input type="hidden" name="token" value="${escapeHtml(token)}">
                   ${options.giftCardError ? `<p role="alert">${escapeHtml(options.giftCardError)}</p>` : ""}
                   ${giftCardFields}
-                  <button type="submit">${isRejection ? title.startsWith("Reject") ? "Confirm rejection" : "Confirm cancellation" : title.startsWith("Approve game") ? "Confirm approval and deduct wallet" : "Confirm approval and add funds"}</button>
+                  <button type="submit">${escapeHtml(approvalButtonLabel)}</button>
                 </form>
                 <small>This request can only be processed once and only while it is pending.</small>`
               : ""
@@ -211,6 +223,7 @@ export default async function handler(req, res) {
       );
     }
   }
+  const walletPayment = purchaseRequest?.details?.walletPayment !== false;
   const giftCardQuantity =
     purchaseRequest?.details?.isGiftCard === true
       ? Number(purchaseRequest.details.quantity)
@@ -233,7 +246,9 @@ export default async function handler(req, res) {
       payload.purpose === "wallet-purchase-admin-action"
         ? `Confirm that you want to ${
             payload.action === "approve"
-              ? "approve this game purchase and deduct its total from the user's wallet"
+              ? walletPayment
+                ? "approve this game purchase and deduct its total from the user's wallet"
+                : `approve this game purchase using ${purchaseRequest?.details?.paymentMethod || "the selected payment method"} without deducting wallet funds`
               : "reject this game purchase without deducting wallet funds"
           } for ${payload.username}.${giftCardQuantity ? ` Enter one gift card code for each of the ${giftCardQuantity} items before confirming.` : ""}`
         : `Confirm that you want to ${
@@ -247,7 +262,10 @@ export default async function handler(req, res) {
       actionTitle,
       confirmationMessage,
       token,
-      giftCardQuantity ? { giftCardQuantity } : {}
+      {
+        ...(giftCardQuantity ? { giftCardQuantity } : {}),
+        ...(isPurchaseApproval ? { walletPayment } : {}),
+      }
     );
   }
 
@@ -271,6 +289,7 @@ export default async function handler(req, res) {
         token,
         {
           giftCardQuantity,
+          walletPayment,
           giftCardError: "All code fields are required (maximum 200 characters each).",
         }
       );
@@ -336,7 +355,9 @@ export default async function handler(req, res) {
 
     const resultStatus = isPurchase
       ? payload.action === "approve"
-        ? "completed"
+        ? result.chargedFromWallet
+          ? "completed"
+          : "approved"
         : "rejected"
       : payload.action === "approve"
         ? "approved"
@@ -358,7 +379,9 @@ export default async function handler(req, res) {
             : "Top-up request cancelled",
         message: isPurchase
           ? payload.action === "approve"
-            ? `${result.details.gameName} · ${result.details.packageName} was approved. EGP ${result.amount.toFixed(2)} was deducted from your wallet.${result.details.isGiftCard ? " Gift card codes are available in your wallet history. Check your email for the codes." : ""}`
+            ? result.chargedFromWallet
+              ? `${result.details.gameName} · ${result.details.packageName} was approved. EGP ${result.amount.toFixed(2)} was deducted from your wallet.${result.details.isGiftCard ? " Gift card codes are available in your wallet history. Check your email for the codes." : ""}`
+              : `${result.details.gameName} · ${result.details.packageName} was approved using ${result.details.paymentMethod}. No wallet funds were deducted.${result.details.isGiftCard ? " Gift card codes are available in your wallet history. Check your email for the codes." : ""}`
             : `${result.details.gameName} · ${result.details.packageName} was rejected. No money was deducted.`
           : payload.action === "approve"
             ? `EGP ${result.amount.toFixed(2)} was added to your wallet. New balance: EGP ${result.balance.toFixed(2)}.`
@@ -428,7 +451,9 @@ export default async function handler(req, res) {
         : "";
     const resultMessage = isPurchase
       ? payload.action === "approve"
-        ? `Purchase approved. ${result.details.gameName} · ${result.details.packageName} was deducted from ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.${giftCardDeliveryMessage}`
+        ? result.chargedFromWallet
+          ? `Purchase approved. ${result.details.gameName} · ${result.details.packageName} was deducted from ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.${giftCardDeliveryMessage}`
+          : `Purchase approved using ${result.details.paymentMethod}. No wallet funds were deducted.${giftCardDeliveryMessage}`
         : `The purchase request for ${result.username} was rejected. No funds were deducted.`
       : payload.action === "approve"
         ? `${result.amount.toFixed(2)} EGP was added to ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.`
