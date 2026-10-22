@@ -162,6 +162,20 @@ export default async function handler(req, res) {
     const productType = String(product.type || "").trim().toLowerCase();
     const isGiftCard =
       productType === "gift card" || productType === "gift cards";
+    const giftCardDeliveryEmail = isGift
+      ? contactEmail.trim()
+      : String(account.email || "").trim();
+    if (
+      isGiftCard &&
+      (!giftCardDeliveryEmail ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(giftCardDeliveryEmail))
+    ) {
+      return res.status(400).json({
+        error: isGift
+          ? "A valid recipient email is required to send Gift Card codes."
+          : "A valid account email is required to receive Gift Card codes.",
+      });
+    }
     if (isWalletPayment && account.balance < total) {
       return res.status(409).json({
         error: `Insufficient wallet balance. Available: EGP ${Number(account.balance).toFixed(2)}.`,
@@ -186,7 +200,7 @@ export default async function handler(req, res) {
       isGift,
       recipient: isGift ? recipient.trim() : "",
       email: account.email || "",
-      contactEmail: contactEmail.trim() || account.email || "",
+      contactEmail: giftCardDeliveryEmail || contactEmail.trim() || account.email || "",
     };
 
     const request = await createWalletPurchaseRequest({
