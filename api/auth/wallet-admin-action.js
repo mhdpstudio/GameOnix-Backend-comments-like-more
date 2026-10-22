@@ -256,11 +256,15 @@ export default async function handler(req, res) {
     );
   } catch (error) {
     console.error("Wallet admin action failed:", error);
+    const actionError =
+      typeof error?.message === "string" && error.message.trim()
+        ? error.message.trim().slice(0, 400)
+        : "An unexpected server error occurred.";
     return sendPage(
       res,
       500,
       "Action failed",
-      "The request could not be processed. No success was reported; check the wallet ledger and try again."
+      `The request could not be confirmed. Check the wallet ledger before retrying. Details: ${actionError}`
     );
   }
 }
