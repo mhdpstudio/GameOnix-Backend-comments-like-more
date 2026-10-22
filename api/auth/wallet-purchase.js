@@ -87,15 +87,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Enter valid game order details." });
   }
 
-  const playerAccount = isGift ? recipient.trim() : playerId.trim();
-  if (!playerAccount) {
-    return res.status(400).json({
-      error: isGift
-        ? "Enter the gift recipient's player or account ID."
-        : "Enter your player or account ID.",
-    });
-  }
-
   try {
     const [account, catalogResponse, paymentsResponse] = await Promise.all([
       getWalletBalanceByUsername(username),
@@ -162,6 +153,14 @@ export default async function handler(req, res) {
     const productType = String(product.type || "").trim().toLowerCase();
     const isGiftCard =
       productType === "gift card" || productType === "gift cards";
+    const playerAccount = isGift ? recipient.trim() : playerId.trim();
+    if (!isGiftCard && !playerAccount) {
+      return res.status(400).json({
+        error: isGift
+          ? "Enter the gift recipient's player or account ID."
+          : "Enter your player or account ID.",
+      });
+    }
     const giftCardDeliveryEmail = isGift
       ? contactEmail.trim()
       : String(account.email || "").trim();
