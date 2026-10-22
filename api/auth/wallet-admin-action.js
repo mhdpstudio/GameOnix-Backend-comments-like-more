@@ -1,10 +1,15 @@
 import jwt from "jsonwebtoken";
 import {
+  approveWalletPurchaseRequest,
   approveWalletTopUpRequest,
+  cancelWalletPurchaseRequest,
   cancelWalletTopUpRequest,
 } from "../../lib/wallet-ledger.js";
 import { createWalletNotification } from "../../lib/wallet-notifications.js";
-import { sendWalletTopUpUserStatusEmail } from "../../lib/wallet-mailer.js";
+import {
+  sendWalletPurchaseStatusEmail,
+  sendWalletTopUpUserStatusEmail,
+} from "../../lib/wallet-mailer.js";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => {
@@ -20,6 +25,8 @@ function escapeHtml(value) {
 }
 
 function sendPage(res, statusCode, title, message, token) {
+  const isRejection =
+    title.startsWith("Cancel") || title.startsWith("Reject");
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store, max-age=0");
@@ -41,7 +48,7 @@ function sendPage(res, statusCode, title, message, token) {
           main { width: min(100%, 480px); padding: 30px; border: 1px solid #514267; border-radius: 18px; background: #1b1920; box-shadow: 0 24px 70px #0008; }
           h1 { margin: 0 0 12px; color: #c9a7ff; font-size: 24px; }
           p { color: #c6c1d0; }
-          button { width: 100%; margin-top: 14px; padding: 13px 16px; border: 0; border-radius: 9px; background: ${title.startsWith("Cancel") ? "#a83d46" : "#16845b"}; color: white; font-size: 15px; font-weight: 700; cursor: pointer; }
+          button { width: 100%; margin-top: 14px; padding: 13px 16px; border: 0; border-radius: 9px; background: ${isRejection ? "#a83d46" : "#16845b"}; color: white; font-size: 15px; font-weight: 700; cursor: pointer; }
           small { display: block; margin-top: 16px; color: #9994a3; }
         </style>
       </head>
@@ -53,7 +60,7 @@ function sendPage(res, statusCode, title, message, token) {
             token
               ? `<form method="post">
                   <input type="hidden" name="token" value="${escapeHtml(token)}">
-                  <button type="submit">${title.startsWith("Cancel") ? "Confirm cancellation" : "Confirm approval and add funds"}</button>
+                  <button type="submit">${isRejection ? title.startsWith("Reject") ? "Confirm rejection" : "Confirm cancellation" : title.startsWith("Approve game") ? "Confirm approval and deduct wallet" : "Confirm approval and add funds"}</button>
                 </form>
                 <small>This request can only be processed once and only while it is pending.</small>`
               : ""
@@ -92,7 +99,9 @@ function verifyActionToken(token) {
   });
 
   if (
-    payload.purpose !== "wallet-admin-action" ||
+    !["wallet-admin-action", "wallet-purchase-admin-action"].includes(
+      payload.purpose
+    ) ||
     typeof payload.requestId !== "string" ||
     typeof payload.username !== "string" ||
     typeof payload.requestFingerprint !== "string" ||
@@ -127,34 +136,60 @@ export default async function handler(req, res) {
   }
 
   const actionTitle =
-    payload.action === "approve" ? "Approve top-up request" : "Cancel top-up request";
+    payload.purpose === "wallet-purchase-admin-action"
+      ? payload.action === "approve"
+        ? "Approve game purchase"
+        : "Reject game purchase"
+      : payload.action === "approve"
+        ? "Approve top-up request"
+        : "Cancel top-up request";
   if (req.method === "GET") {
     return sendPage(
       res,
       200,
       actionTitle,
-      `Confirm that you want to ${
-        payload.action === "approve"
-          ? "approve this request and add the requested funds. Confirm only after verifying the payment"
-          : "cancel this pending request"
-      } for ${payload.username}.`,
+      payload.purpose === "wallet-purchase-admin-action"
+        ? `Confirm that you want to ${
+            payload.action === "approve"
+              ? "approve this game purchase and deduct its total from the user's wallet"
+              : "reject this game purchase without deducting wallet funds"
+          } for ${payload.username}.`
+        : `Confirm that you want to ${
+            payload.action === "approve"
+              ? "approve this request and add the requested funds. Confirm only after verifying the payment"
+              : "cancel this pending request"
+          } for ${payload.username}.`,
       token
     );
   }
 
   try {
+    const isPurchase =
+      payload.purpose === "wallet-purchase-admin-action";
     const result =
       payload.action === "approve"
-        ? await approveWalletTopUpRequest({
+        ? await (isPurchase
+          ? approveWalletPurchaseRequest({
+              id: payload.requestId,
+              username: payload.username,
+              expectedFingerprint: payload.requestFingerprint,
+            })
+          : approveWalletTopUpRequest({
             id: payload.requestId,
             username: payload.username,
             expectedFingerprint: payload.requestFingerprint,
-          })
-        : await cancelWalletTopUpRequest({
+          }))
+        : await (isPurchase
+          ? cancelWalletPurchaseRequest({
+              id: payload.requestId,
+              username: payload.username,
+              expectedFingerprint: payload.requestFingerprint,
+            })
+          : cancelWalletTopUpRequest({
             id: payload.requestId,
             username: payload.username,
             expectedFingerprint: payload.requestFingerprint,
-          });
+          }));
 
     if (!result) {
       return sendPage(
@@ -180,32 +215,56 @@ export default async function handler(req, res) {
         "The request details have changed since this email was sent. Use the latest email to review it."
       );
     }
+    if (result.insufficientFunds) {
+      return sendPage(
+        res,
+        409,
+        "Insufficient wallet balance",
+        `This purchase was not approved because ${payload.username}'s current wallet balance (${Number(result.balance).toFixed(2)} EGP) is too low. No money was deducted.`
+      );
+    }
 
+    const resultStatus = isPurchase
+      ? payload.action === "approve"
+        ? "completed"
+        : "rejected"
+      : payload.action === "approve"
+        ? "approved"
+        : "cancelled";
     let notificationCreated = true;
     try {
       await createWalletNotification({
         username: result.username,
-        title:
-          payload.action === "approve"
+        title: isPurchase
+          ? payload.action === "approve"
+            ? "Game purchase approved"
+            : "Game purchase rejected"
+          : payload.action === "approve"
             ? "Top-up request approved"
             : "Top-up request cancelled",
-        message:
-          payload.action === "approve"
+        message: isPurchase
+          ? payload.action === "approve"
+            ? `${result.details.gameName} · ${result.details.packageName} was approved. EGP ${result.amount.toFixed(2)} was deducted from your wallet.`
+            : `${result.details.gameName} · ${result.details.packageName} was rejected. No money was deducted.`
+          : payload.action === "approve"
             ? `EGP ${result.amount.toFixed(2)} was added to your wallet. New balance: EGP ${result.balance.toFixed(2)}.`
             : `Your pending top-up request for EGP ${result.amount.toFixed(2)} was cancelled by the admin.`,
-        type: "top_up_request",
+        type: isPurchase ? "game_purchase" : "top_up_request",
         details: {
+          ...(isPurchase ? result.details : {}),
           requestId: result.id,
           amount: result.amount,
           email: result.details?.email || "Not provided",
-          paymentMethod: result.details?.paymentMethod || "Not provided",
-          mobileNumber: result.details?.mobileNumber || "Not provided",
-          whatsappNumber: result.details?.whatsappNumber || "Not provided",
+          paymentMethod: result.details?.paymentMethod || "",
+          mobileNumber: result.details?.mobileNumber || "",
+          whatsappNumber: result.details?.whatsappNumber || "",
           currentBalance:
             payload.action === "approve"
               ? result.balance
-              : result.details?.currentBalance,
-          status: payload.action === "approve" ? "approved" : "cancelled",
+              : isPurchase
+                ? undefined
+                : result.details?.currentBalance,
+          status: resultStatus,
         },
       });
     } catch (notificationError) {
@@ -218,25 +277,40 @@ export default async function handler(req, res) {
 
     let userEmailSent = false;
     try {
-      await sendWalletTopUpUserStatusEmail({
-        email: result.details?.email,
-        username: result.username,
-        requestId: result.id,
-        amount: result.amount,
-        paymentMethod: result.details?.paymentMethod,
-        status: payload.action === "approve" ? "approved" : "rejected",
-        currentBalance:
-          payload.action === "approve"
-            ? result.balance
-            : result.details?.currentBalance,
-      });
+      if (isPurchase) {
+        await sendWalletPurchaseStatusEmail({
+          email: result.details?.email,
+          username: result.username,
+          requestId: result.id,
+          amount: result.amount,
+          currentBalance: result.balance,
+          details: result.details,
+          status: resultStatus,
+        });
+      } else {
+        await sendWalletTopUpUserStatusEmail({
+          email: result.details?.email,
+          username: result.username,
+          requestId: result.id,
+          amount: result.amount,
+          paymentMethod: result.details?.paymentMethod,
+          status: payload.action === "approve" ? "approved" : "rejected",
+          currentBalance:
+            payload.action === "approve"
+              ? result.balance
+              : result.details?.currentBalance,
+        });
+      }
       userEmailSent = true;
     } catch (emailError) {
       console.error("Wallet request decision email failed:", emailError);
     }
 
-    const resultMessage =
-      payload.action === "approve"
+    const resultMessage = isPurchase
+      ? payload.action === "approve"
+        ? `Purchase approved. ${result.details.gameName} · ${result.details.packageName} was deducted from ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.`
+        : `The purchase request for ${result.username} was rejected. No funds were deducted.`
+      : payload.action === "approve"
         ? `${result.amount.toFixed(2)} EGP was added to ${result.username}'s wallet. New balance: ${result.balance.toFixed(2)} EGP.`
         : `The pending top-up request for ${result.username} was cancelled.`;
     const completionMessage = [
@@ -251,7 +325,13 @@ export default async function handler(req, res) {
     return sendPage(
       res,
       200,
-      payload.action === "approve" ? "Request approved" : "Request cancelled",
+      isPurchase
+        ? payload.action === "approve"
+          ? "Purchase approved"
+          : "Purchase rejected"
+        : payload.action === "approve"
+          ? "Request approved"
+          : "Request cancelled",
       completionMessage
     );
   } catch (error) {
