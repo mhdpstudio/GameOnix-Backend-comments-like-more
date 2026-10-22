@@ -469,7 +469,6 @@ export default async function handler(req, res) {
       balance: account.balance,
       email: account.email,
       walletNumber: walletAccount.walletNumber,
-      pinConfigured: walletAccount.pinConfigured,
       transactions,
     });
   } catch (error) {

@@ -1,8 +1,8 @@
 # Wallet Sheets operations
 
-Wallet transfers and top-up approvals use this Apps Script endpoint so balance
-changes are serialized with `LockService` and committed together with their
-ledger rows through one Google Sheets `batchUpdate`.
+Top-up approvals use this Apps Script endpoint so balance changes are serialized
+with `LockService` and committed together with the request status through one
+Google Sheets `batchUpdate`.
 
 ## Deploy
 
@@ -29,6 +29,7 @@ use its current `/exec` URL in Vercel.
 
 Never expose the HMAC secret in frontend code. The backend expects the existing
 `Wallet` account column, `Wallet Transactions` ledger tab, and the main account
-tab to remain in the same spreadsheet. `Wallet Accounts` is created on demand.
+tab to remain in the same spreadsheet. `Wallet Accounts` is created on demand
+and stores wallet IDs.
 
-Test with two low-balance test accounts before enabling transfers for users.
+Test top-up approval with a pending request before enabling it for users.

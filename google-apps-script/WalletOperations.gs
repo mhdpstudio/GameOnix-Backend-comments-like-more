@@ -3,30 +3,30 @@ function doGet() {
 }
 
 function doPost(event) {
-  const payload = JSON.parse(event.postData.contents);
-  const signature = payload.signature;
-  delete payload.signature;
-
-  if (!isValidSignature(payload, signature)) {
-    return jsonResponse({ success: false, error: "Unauthorized operation." });
-  }
-
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(15000)) {
-    return jsonResponse({
-      success: false,
-      code: "WALLET_BUSY",
-      error: "Wallet operations are busy. Please try again.",
-    });
-  }
-
+  let lock;
   try {
+    if (!event?.postData?.contents) {
+      throw new Error("Request body is missing.");
+    }
+    const payload = JSON.parse(event.postData.contents);
+    const signature = payload.signature;
+    delete payload.signature;
+
+    if (!isValidSignature(payload, signature)) {
+      return jsonResponse({ success: false, error: "Unauthorized operation." });
+    }
+
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(15000)) {
+      return jsonResponse({
+        success: false,
+        code: "WALLET_BUSY",
+        error: "Wallet operations are busy. Please try again.",
+      });
+    }
+
     const result =
-      payload.action === "transfer"
-        ? transferFunds(payload)
-        : payload.action === "approve_top_up"
-          ? approveTopUp(payload)
-          : null;
+      payload.action === "approve_top_up" ? approveTopUp(payload) : null;
     if (!result) {
       return jsonResponse({
         success: false,
@@ -41,7 +41,7 @@ function doPost(event) {
       error: error.message || "Wallet operation failed.",
     });
   } finally {
-    lock.releaseLock();
+    if (lock?.hasLock()) lock.releaseLock();
   }
 }
 
@@ -91,18 +91,6 @@ function getWalletSheet(spreadsheet, sheetName) {
   return { sheet, values, usernameColumn, walletColumn };
 }
 
-function getAccountRow(accountsSheet, username, walletNumber) {
-  if (!accountsSheet) throw new Error("The Wallet Accounts sheet is missing.");
-  const rows = accountsSheet.getDataRange().getValues();
-  const row = rows.find(
-    (entry, index) =>
-      index > 0 &&
-      String(entry[0] || "").trim().toLowerCase() === username.toLowerCase() &&
-      String(entry[1] || "") === walletNumber
-  );
-  return row || null;
-}
-
 function findWalletRow(walletData, username) {
   const rowIndex = walletData.values.findIndex(
     (row, index) =>
@@ -117,135 +105,6 @@ function findWalletRow(walletData, username) {
     throw new Error("Wallet balance is invalid.");
   }
   return { rowNumber: rowIndex + 1, balance };
-}
-
-function transferFunds(payload) {
-  const amount = Number(payload.amount);
-  if (
-    !Number.isFinite(amount) ||
-    amount < 1 ||
-    amount > 100000 ||
-    Math.round(amount * 100) !== amount * 100
-  ) {
-    throw new Error("Transfer amount is invalid.");
-  }
-  if (
-    typeof payload.transferId !== "string" ||
-    !/^[\da-f]{8}-[\da-f]{4}-[1-8][\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i.test(
-      payload.transferId
-    )
-  ) {
-    throw new Error("Transfer ID is invalid.");
-  }
-  if (
-    typeof payload.senderUsername !== "string" ||
-    typeof payload.recipientUsername !== "string" ||
-    payload.senderUsername.toLowerCase() ===
-      payload.recipientUsername.toLowerCase()
-  ) {
-    throw new Error("Transfer accounts are invalid.");
-  }
-
-  const { spreadsheet, sheetName } = getSpreadsheet();
-  const accountsSheet = spreadsheet.getSheetByName("Wallet Accounts");
-  if (
-    !getAccountRow(
-      accountsSheet,
-      payload.senderUsername,
-      payload.senderWalletNumber
-    ) ||
-    !getAccountRow(
-      accountsSheet,
-      payload.recipientUsername,
-      payload.recipientWalletNumber
-    )
-  ) {
-    throw new Error("Wallet number does not match the account.");
-  }
-
-  const walletData = getWalletSheet(spreadsheet, sheetName);
-  const transactionsSheet = spreadsheet.getSheetByName("Wallet Transactions");
-  if (!transactionsSheet) throw new Error("Wallet transaction sheet is missing.");
-  const transactionRows = transactionsSheet.getDataRange().getValues();
-  const sentRow = transactionRows.find(
-    (row) => String(row[0] || "") === `${payload.transferId}:out`
-  );
-  const receivedRow = transactionRows.find(
-    (row) => String(row[0] || "") === `${payload.transferId}:in`
-  );
-  if (sentRow && receivedRow) {
-    if (
-      String(sentRow[1] || "").toLowerCase() !==
-        payload.senderUsername.toLowerCase() ||
-      String(receivedRow[1] || "").toLowerCase() !==
-        payload.recipientUsername.toLowerCase() ||
-      Number(sentRow[4]) !== amount ||
-      Number(receivedRow[4]) !== amount
-    ) {
-      const error = new Error("Transfer ID was already used for another transfer.");
-      error.code = "DUPLICATE_TRANSFER";
-      throw error;
-    }
-    return {
-      transferId: payload.transferId,
-      senderBalance: findWalletRow(walletData, payload.senderUsername).balance,
-      replayed: true,
-    };
-  }
-  if (sentRow || receivedRow) {
-    const error = new Error("This transfer has already been processed.");
-    error.code = "DUPLICATE_TRANSFER";
-    throw error;
-  }
-
-  const sender = findWalletRow(walletData, payload.senderUsername);
-  const recipient = findWalletRow(walletData, payload.recipientUsername);
-  if (sender.balance < amount) {
-    const error = new Error("Insufficient wallet balance.");
-    error.code = "INSUFFICIENT_FUNDS";
-    throw error;
-  }
-
-  const newSenderBalance = Math.round((sender.balance - amount) * 100) / 100;
-  const newRecipientBalance = Math.round((recipient.balance + amount) * 100) / 100;
-  const timestamp = new Date().toISOString();
-  applyAtomicSheetUpdates(spreadsheet.getId(), [
-    updateCellRequest(
-      walletData.sheet.getSheetId(),
-      sender.rowNumber,
-      walletData.walletColumn + 1,
-      newSenderBalance
-    ),
-    updateCellRequest(
-      walletData.sheet.getSheetId(),
-      recipient.rowNumber,
-      walletData.walletColumn + 1,
-      newRecipientBalance
-    ),
-    appendRowRequest(transactionsSheet.getSheetId(), [
-      `${payload.transferId}:out`,
-      payload.senderUsername,
-      "transfer_sent",
-      `Transfer to ${payload.recipientUsername}`,
-      amount,
-      "completed",
-      timestamp,
-    ]),
-    appendRowRequest(transactionsSheet.getSheetId(), [
-      `${payload.transferId}:in`,
-      payload.recipientUsername,
-      "transfer_received",
-      `Transfer from ${payload.senderUsername}`,
-      amount,
-      "completed",
-      timestamp,
-    ]),
-  ]);
-
-  return {
-    transferId: payload.transferId,
-    senderBalance: newSenderBalance,
-  };
 }
 
 function approveTopUp(payload) {
