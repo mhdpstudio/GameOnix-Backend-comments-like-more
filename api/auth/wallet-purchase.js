@@ -139,7 +139,9 @@ export default async function handler(req, res) {
     const unitPrice = Number(pack?.price);
     if (
       !product ||
+      product.able === false ||
       !pack ||
+      pack.able === false ||
       !Number.isFinite(unitPrice) ||
       unitPrice <= 0 ||
       !Number.isFinite(unitPrice * quantity) ||
