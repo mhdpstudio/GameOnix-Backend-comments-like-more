@@ -3,9 +3,8 @@ import { sendGameRequestEmail } from "../lib/wallet-mailer.js";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PLATFORMS = new Set([
-  "",
   "PC",
-  "PlayStation",
+  "PS Family",
   "Xbox",
   "Nintendo Switch",
   "Mobile",
@@ -61,7 +60,7 @@ export default async function handler(req, res) {
     });
   }
 
-  if (!PLATFORMS.has(platform)) {
+  if (!platform || !PLATFORMS.has(platform)) {
     return res.status(400).json({
       error: "Choose a valid platform.",
     });
