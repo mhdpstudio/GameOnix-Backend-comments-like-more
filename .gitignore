@@ -1,6 +1,7 @@
 
 # Dependencies
 node_modules/
+.kombai/
 
 # Environment variables and secrets
 .env
