@@ -1,3 +1,4 @@
+import jwt from "jsonwebtoken";
 import { requireUser } from "../lib/auth.js";
 import { setCors } from "../lib/http.js";
 import { getWalletBalanceByUsername } from "../lib/sheets.js";
@@ -80,6 +81,11 @@ export default async function handler(req, res) {
       });
     }
 
+    const secret = process.env.GAMEONIX_API_TOKEN_SECRET;
+    if (!secret || secret.length < 32) {
+      throw new Error("Support replies are not configured.");
+    }
+
     notification = await createWalletNotification({
       username,
       title: "Support message received",
@@ -95,12 +101,33 @@ export default async function handler(req, res) {
       },
     });
 
+    const replyToken = jwt.sign(
+      {
+        purpose: "support-request-reply",
+        notificationId: notification.id,
+        username,
+        email,
+        topic,
+        topicLabel,
+        orderId,
+        messagePreview: message.slice(0, 300),
+      },
+      secret,
+      {
+        algorithm: "HS256",
+        expiresIn: "30d",
+        issuer: "gameonix-community-api",
+        audience: "gameonix-support-reply",
+      }
+    );
+
     await sendSupportRequestEmail({
       topic: topicLabel,
       orderId,
       message,
       username,
       email,
+      replyUrl: `https://gameonixfav.vercel.app/api/support-request-reply?token=${encodeURIComponent(replyToken)}`,
     });
 
     return res.status(200).json({
