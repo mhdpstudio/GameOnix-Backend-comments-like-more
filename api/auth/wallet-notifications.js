@@ -1,6 +1,7 @@
 import { requireUser } from "../../lib/auth.js";
 import { setCors } from "../../lib/http.js";
 import {
+  createWalletNotification,
   deleteAllWalletNotifications,
   deleteWalletNotification,
   getWalletNotifications,
