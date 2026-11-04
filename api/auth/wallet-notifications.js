@@ -94,6 +94,15 @@ function getRequestBody(req) {
   return {};
 }
 
+function getNotificationAdmins() {
+  return new Set(
+    String(process.env.GAMEONIX_NOTIFICATION_ADMIN_USERNAMES || "")
+      .split(",")
+      .map((username) => username.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
 export default async function handler(req, res) {
   if (setCors(req, res)) return;
 
@@ -104,6 +113,7 @@ export default async function handler(req, res) {
 
   const username = requireUser(req, res);
   if (!username) return;
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
 
   try {
     if (req.method === "DELETE") {
@@ -146,13 +156,60 @@ export default async function handler(req, res) {
       }
       return res.status(200).json({
         notifications,
+        canSend: getNotificationAdmins().has(username.toLowerCase()),
         unreadCount: notifications.filter(
           (notification) => !notification.readAt
         ).length,
       });
     }
 
-    const { notificationId, markAll } = getRequestBody(req);
+    const body = getRequestBody(req);
+    if (body.action === "send") {
+      if (!getNotificationAdmins().has(username.toLowerCase())) {
+        return res.status(403).json({ error: "Admin access is required." });
+      }
+
+      const recipientUsername =
+        typeof body.username === "string" ? body.username.trim() : "";
+      const title = typeof body.title === "string" ? body.title.trim() : "";
+      const message =
+        typeof body.message === "string" ? body.message.trim() : "";
+      const imageData =
+        typeof body.imageData === "string" ? body.imageData : "";
+      const hasInvalidImageData =
+        body.imageData !== undefined &&
+        body.imageData !== null &&
+        typeof body.imageData !== "string";
+
+      if (
+        !recipientUsername ||
+        recipientUsername.length > 64 ||
+        !/^[a-zA-Z0-9._-]+$/.test(recipientUsername) ||
+        !title ||
+        title.length > 100 ||
+        !message ||
+        message.length > 2000 ||
+        hasInvalidImageData ||
+        (imageData &&
+          (!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(imageData) ||
+            imageData.length > 44000))
+      ) {
+        return res.status(400).json({
+          error: "Enter a valid recipient, title, message, and image.",
+        });
+      }
+
+      const notification = await createWalletNotification({
+        username: recipientUsername,
+        title,
+        message,
+        type: "direct_message",
+        details: imageData ? { imageData } : null,
+      });
+      return res.status(201).json({ success: true, notification });
+    }
+
+    const { notificationId, markAll } = body;
     if (markAll === true) {
       await markAllWalletNotificationsRead(username);
       return res.status(200).json({ success: true });
