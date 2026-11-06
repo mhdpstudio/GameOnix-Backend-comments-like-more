@@ -1,3 +1,4 @@
+import jwt from "jsonwebtoken";
 import { requireUser } from "../../lib/auth.js";
 import { setCors } from "../../lib/http.js";
 import {
@@ -104,6 +105,24 @@ function getNotificationAdmins() {
   );
 }
 
+function createAdminActionToken(username) {
+  const secret = process.env.GAMEONIX_API_TOKEN_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error("Admin actions are not configured.");
+  }
+
+  return jwt.sign(
+    { purpose: "admin-password-reset-link", username },
+    secret,
+    {
+      algorithm: "HS256",
+      expiresIn: "60s",
+      issuer: "gameonix-community-api",
+      audience: "gameonix-admin-action",
+    }
+  );
+}
+
 export default async function handler(req, res) {
   if (setCors(req, res)) return;
 
@@ -165,6 +184,52 @@ export default async function handler(req, res) {
     }
 
     const body = getRequestBody(req);
+    if (body.action === "send-password-reset-link") {
+      if (!getNotificationAdmins().has(username.toLowerCase())) {
+        return res.status(403).json({ error: "Admin access is required." });
+      }
+
+      const email =
+        typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+      if (
+        email.length > 254 ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      ) {
+        return res.status(400).json({ error: "Enter a valid email address." });
+      }
+
+      const token = createAdminActionToken(username);
+      const response = await fetch(
+        "https://gameonix-backend.vercel.app/api/auth/forgot-password",
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ action: "admin-reset-link", email }),
+          signal: AbortSignal.timeout(8000),
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        console.error(
+          "Admin password reset request failed:",
+          data.error || response.status
+        );
+        return res.status(502).json({
+          error: "Unable to send the password reset link. Please try again.",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message:
+          "If an active account uses that email, a secure reset link was sent.",
+      });
+    }
+
     if (body.action === "send") {
       if (!getNotificationAdmins().has(username.toLowerCase())) {
         return res.status(403).json({ error: "Admin access is required." });
