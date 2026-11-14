@@ -11,9 +11,8 @@ import { sendGameRequestEmail } from "../lib/wallet-mailer.js";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PLATFORMS = new Set([
   "PC",
-  "PS Family",
+  "PS",
   "Xbox",
-  "Nintendo Switch",
   "Mobile",
   "Other",
 ]);
@@ -34,6 +33,18 @@ function cleanText(value, maxLength) {
   return typeof value === "string"
     ? value.replace(/\r\n?/g, "\n").trim().slice(0, maxLength)
     : "";
+}
+
+function getNotificationAdminUsernames() {
+  return [
+    ...new Map(
+      String(process.env.GAMEONIX_NOTIFICATION_ADMIN_USERNAMES || "")
+        .split(",")
+        .map((username) => username.trim())
+        .filter(Boolean)
+        .map((username) => [username.toLowerCase(), username])
+    ).values(),
+  ];
 }
 
 export default async function handler(req, res) {
@@ -69,6 +80,7 @@ export default async function handler(req, res) {
   }
 
   let notification;
+  const adminNotifications = [];
   try {
     const account = await getWalletBalanceByUsername(username);
     const email = cleanText(account?.email, 254).toLowerCase();
@@ -76,6 +88,11 @@ export default async function handler(req, res) {
       return res.status(400).json({
         error: "Add and verify an email address on your account before requesting a game.",
       });
+    }
+
+    const adminUsernames = getNotificationAdminUsernames();
+    if (!adminUsernames.length) {
+      throw new Error("Game request notifications are not configured.");
     }
 
     const secret = process.env.GAMEONIX_API_TOKEN_SECRET;
@@ -93,6 +110,25 @@ export default async function handler(req, res) {
         platform,
       },
     });
+
+    for (const adminUsername of adminUsernames) {
+      adminNotifications.push(
+        await createWalletNotification({
+          username: adminUsername,
+          title: `Game request: ${gameTitle}`,
+          message: `@${username} requested ${gameTitle} for ${platform}.`,
+          type: "game_request_admin",
+          details: {
+            requestId: notification.id,
+            username,
+            email,
+            gameTitle,
+            platform,
+            details,
+          },
+        })
+      );
+    }
 
     const replyToken = jwt.sign(
       {
@@ -132,6 +168,19 @@ export default async function handler(req, res) {
       } catch (cleanupError) {
         console.error(
           "Failed to clean up game request notification:",
+          cleanupError
+        );
+      }
+    }
+    for (const adminNotification of adminNotifications) {
+      try {
+        await deleteWalletNotification(
+          adminNotification.username,
+          adminNotification.id
+        );
+      } catch (cleanupError) {
+        console.error(
+          "Failed to clean up admin game request notification:",
           cleanupError
         );
       }
